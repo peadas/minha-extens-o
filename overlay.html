@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dados</title>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;600&family=Cinzel:wght@700;800&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:transparent;font:16px/1.4 Barlow,system-ui,sans-serif;color:#eef0ee}
+#cv{position:fixed;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+#chips{position:fixed;left:50%;top:max(14px,env(safe-area-inset-top,0px));transform:translateX(-50%);display:flex;flex-direction:column;gap:8px;align-items:center;width:max-content;max-width:calc(100% - 24px);pointer-events:none}
+.chip{background:#0f1213ee;border:1px solid #8b9594;padding:10px 18px;text-align:center;max-width:min(92vw,560px);box-shadow:0 6px 20px #000a;animation:in .3s ease-out both;transition:opacity .5s,transform .5s}
+.chip.out{opacity:0;transform:translateY(-8px)}
+@keyframes in{from{opacity:0;transform:translateY(-10px)}}
+.who{font:700 1rem "Barlow Condensed",sans-serif;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.rows{display:flex;gap:20px;justify-content:center;flex-wrap:wrap}
+.rv small{display:block;color:#9aa4a3;font:600 .85rem "Barlow Condensed",sans-serif;text-transform:uppercase;letter-spacing:.05em}
+.rv strong{font:800 2.1rem/1.2 Cinzel,serif}
+.rv.x{opacity:.45}.rv.x strong{text-decoration:line-through}
+.rv.pv small,.rv.pv strong{color:#e9a23b}
+.rv.rl small,.rv.rl strong{color:#e8d9b0}
+.ok,.ok strong{color:#5fd38a}
+.bad,.bad strong{color:#ff6b6b}
+.crit{font:800 1.6rem Cinzel,serif;margin-top:2px}
+.note{color:#9aa4a3;font-size:.9rem;margin-top:4px}
+</style>
+</head>
+<body>
+<canvas id="cv" aria-hidden="true"></canvas>
+<div id="chips" aria-live="polite"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="engine.js"></script>
+<script type="module">
+import {loadOBR,ready} from "./obr.js";
+const $=s=>document.querySelector(s);
+const qs=new URLSearchParams(location.search),standalone=qs.has("standalone"),mid=qs.get("mid")||"";
+const CH=ENG.CH,HOLD=5500,CHIP_LIFE=9000;
+let OBR=null,received=0,idleTimer=0;
+const queue=[];let cur=null,raf=0;
+
+/* ---------- 3D (mesmos dados e materiais da ficha) ---------- */
+let R,scene,cam,M,shTex,gl=false;
+function init3d(){
+  R=new THREE.WebGLRenderer({canvas:$("#cv"),alpha:true,antialias:true});
+  R.setPixelRatio(Math.min(2,devicePixelRatio));R.setClearColor(0x000000,0);
+  scene=new THREE.Scene();cam=new THREE.PerspectiveCamera(35,1,50,8000);
+  M={gold:new THREE.MeshStandardMaterial({color:0xd0a93f,metalness:.45,roughness:.3}),ena:new THREE.MeshStandardMaterial({color:0x08080a,metalness:.1,roughness:.25}),
+    pv:new THREE.MeshPhysicalMaterial({color:0x14171c,metalness:.35,roughness:.25,clearcoat:1,clearcoatRoughness:.15}),
+    rel:new THREE.MeshPhysicalMaterial({color:0xe9e3d3,metalness:.1,roughness:.3,clearcoat:.8})};
+  scene.add(new THREE.AmbientLight(0xffffff,.85));
+  const l2=new THREE.DirectionalLight(0xffe8b0,.6);l2.position.set(400,500,300);scene.add(l2);
+  const l=new THREE.DirectionalLight(0xffffff,.9);l.position.set(-300,800,-400);scene.add(l);
+  const c=document.createElement("canvas");c.width=c.height=64;const x=c.getContext("2d"),gr=x.createRadialGradient(32,32,6,32,32,32);
+  gr.addColorStop(0,"rgba(0,0,0,.9)");gr.addColorStop(1,"rgba(0,0,0,0)");x.fillStyle=gr;x.fillRect(0,0,64,64);shTex=new THREE.CanvasTexture(c);
+  setView();gl=true;
+}
+/* câmera de cima; a arena é sempre a mesma, a tela só muda o zoom */
+function setView(){
+  const w=innerWidth,h=innerHeight,k=Math.min(w/ENG.VIEW.w,h/ENG.VIEW.h);
+  R.setSize(w,h,false);cam.aspect=w/h;
+  const H=(h/k/2)/Math.tan(cam.fov*Math.PI/360);
+  cam.position.set(0,H,0);cam.up.set(0,0,-1);cam.lookAt(0,0,0);cam.updateProjectionMatrix();
+}
+addEventListener("resize",()=>{if(gl){setView();R.render(scene,cam)}});
+const texC={};
+function numMat(n,pv){
+  const key=n+(pv||"");
+  if(!texC[key]){
+    const c=document.createElement("canvas");c.width=c.height=128;
+    const x=c.getContext("2d");x.textAlign="center";x.textBaseline="middle";
+    x.font=`italic 700 ${n>9?66:88}px Georgia,serif`;
+    if(!pv){x.lineWidth=4;x.strokeStyle="#6b4e12";x.strokeText(n,64,70)}
+    x.fillStyle=({pv:"#e9a23b",rel:"#8c2f3a"})[pv]||"#ecc962";x.fillText(n,64,70);
+    if(n===6||n===9){x.fillRect(40,112,48,7)}
+    texC[key]=new THREE.MeshBasicMaterial({map:new THREE.CanvasTexture(c),transparent:true,alphaTest:.04});
+  }
+  return texC[key];
+}
+const mk=pos=>{const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(pos,3));g.computeVertexNormals();return g};
+/* kind: "" (dourado) | "pv" (pavor) | "rel" (relação). Face i = número i+1. d4: o número fica nos cantos */
+function makeDie(f,kind){
+  const a=ENG.analyze(f),grp=new THREE.Group(),all=[],z=new THREE.Vector3(0,0,1);
+  a.Fs.forEach((F,i)=>{
+    const pos=[];
+    F.t.forEach(t=>t.forEach(v=>{all.push(v.x,v.y,v.z);const w=v.clone().sub(F.c).multiplyScalar(.8).add(F.c).addScaledVector(F.n,.012);pos.push(w.x,w.y,w.z)}));
+    if(!kind)grp.add(new THREE.Mesh(mk(pos),M.ena));
+    const q=new THREE.Quaternion().setFromUnitVectors(z,F.n);
+    if(f===4){
+      const xv=new THREE.Vector3(1,0,0).applyQuaternion(q),yv=new THREE.Vector3(0,1,0).applyQuaternion(q);
+      F.vi.forEach(vi=>{
+        const t=a.V[vi].clone().sub(F.c).normalize(),an=Math.atan2(-t.dot(xv),t.dot(yv));
+        const pl=new THREE.Mesh(new THREE.PlaneGeometry(.6,.6),numMat(vi+1,kind));
+        pl.position.copy(F.c).addScaledVector(t,F.R*.52).addScaledVector(F.n,.025);
+        pl.quaternion.setFromAxisAngle(F.n,an).multiply(q);grp.add(pl);
+      });
+    }else{
+      const s=F.R*1.15,pl=new THREE.Mesh(new THREE.PlaneGeometry(s,s),numMat(i+1,kind));
+      pl.position.copy(F.c).addScaledVector(F.n,.025);pl.quaternion.copy(q);grp.add(pl);
+    }
+  });
+  grp.add(new THREE.Mesh(mk(all),M[kind||"gold"]));
+  grp.userData.s=ENG.RAD/a.mx;grp.scale.setScalar(grp.userData.s);
+  return grp;
+}
+function disposeGroup(c){
+  c.meshes.forEach(m=>{scene.remove(m);scene.remove(m.userData.sh);
+    m.traverse(o=>{if(o.isMesh&&o.geometry)o.geometry.dispose()});m.userData.sh.material.dispose();m.userData.sh.geometry.dispose()});
+  c.meshes=[];
+}
+
+/* ---------- resultado na tela ---------- */
+const chips=$("#chips");
+const el=(tag,cls,txt)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(txt!=null)e.textContent=txt;return e};
+function showChip(p){
+  const c=el("div","chip"),w=el("div","who",p.who+(p.title?" · "+p.title:""));w.style.color=p.color;c.append(w);
+  const rows=el("div","rows");
+  p.rows.forEach(r=>{const rv=el("div","rv "+r.c);rv.append(el("small",null,r.l),el("strong",null,r.v));rows.append(rv)});
+  c.append(rows);
+  if(p.crit)c.append(el("div","crit "+p.crit.c,p.crit.t));
+  if(p.note)c.append(el("div","note",p.note));
+  chips.append(c);
+  while(chips.children.length>4)chips.firstChild.remove();
+  setTimeout(()=>{c.classList.add("out");setTimeout(()=>{c.remove();maybeIdle()},520)},CHIP_LIFE);
+  if(OBR&&p.text){try{OBR.notification.show(p.text)}catch(e){}}
+}
+
+/* ---------- fila de rolagens ---------- */
+function enqueue(raw,seq){
+  if(seq&&seq<=received)return;
+  if(seq)received=seq;
+  clearTimeout(idleTimer);
+  const p=ENG.clean(raw);if(!p)return maybeIdle();
+  queue.push(p);pump();
+}
+function pump(){
+  if(cur)return;
+  const p=queue.shift();if(!p)return maybeIdle();
+  if(!p.anim){showChip(p);return pump()}
+  try{
+    if(!gl)init3d();
+    const sim=new ENG.Sim(p.list,p.seed),meshes=[];
+    p.list.forEach(([n,f],i)=>{
+      const m=makeDie(f,p.kinds[i]);
+      const sh=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({map:shTex,transparent:true,depthWrite:false}));
+      sh.rotation.x=-Math.PI/2;m.userData.sh=sh;scene.add(m,sh);meshes.push(m);
+    });
+    cur={p,sim,meshes,phase:"roll",acc:0,last:performance.now(),t0:0};
+    sync(cur);
+  }catch(e){console.warn("[ficha] 3D indisponível, mostrando só o resultado",e);if(cur)disposeGroup(cur);cur=null;showChip(p);return pump()}
+  if(!raf)raf=requestAnimationFrame(loop);
+}
+function sync(c){
+  c.sim.bodies.forEach((b,i)=>{
+    const m=c.meshes[i],sh=m.userData.sh,hh=Math.max(0,b.p[1]-b.rad*.6);
+    m.position.set(b.p[0],b.p[1],b.p[2]);m.quaternion.set(b.q[0],b.q[1],b.q[2],b.q[3]);
+    sh.position.set(b.p[0],.5,b.p[2]);sh.scale.setScalar(b.rad*(3+hh/150));sh.material.opacity=Math.max(.15,.75-hh/450);
+  });
+}
+function loop(now){
+  raf=0;
+  const c=cur;
+  if(!c){if(gl)R.render(scene,cam);return}
+  try{
+    const dt=Math.min(.05,(now-c.last)/1000);c.last=now;
+    if(c.phase==="roll"){
+      c.acc+=dt;let n=0;
+      while(c.acc>=ENG.DT&&!c.sim.finished&&n++<24){c.sim.stepOnce();c.acc-=ENG.DT}
+      sync(c);
+      if(c.sim.finished){
+        /* se este computador deu um resultado diferente do oficial (raríssimo), gira o dado até a face certa */
+        c.fix=[];
+        c.sim.bodies.forEach((b,i)=>{
+          const want=c.p.res[i];
+          if(c.sim.results[i][2]!==want){
+            const from=c.meshes[i].quaternion.clone(),t=ENG.PH.targetQuat(b,want-1,b.f===4);
+            c.fix.push({i,from,to:new THREE.Quaternion(t[0],t[1],t[2],t[3])});
+          }
+        });
+        c.phase="snap";c.t0=now;
+      }
+    }
+    if(c.phase==="snap"){
+      const k=Math.min(1,(now-c.t0)/300);
+      c.fix.forEach(f=>{c.meshes[f.i].quaternion.copy(f.from).slerp(f.to,k)});
+      if(k>=1){c.phase="hold";c.t0=now;showChip(c.p)}
+    }else if(c.phase==="hold"){
+      if(now-c.t0>=(queue.length?1300:HOLD)){c.phase="out";c.t0=now}
+    }else if(c.phase==="out"){
+      const k=Math.min(1,(now-c.t0)/300);
+      c.meshes.forEach(m=>{m.scale.setScalar(m.userData.s*(1-k));m.userData.sh.material.opacity*=(1-k)});
+      if(k>=1){disposeGroup(c);cur=null;R.render(scene,cam);pump();return}
+    }
+    R.render(scene,cam);
+  }catch(e){
+    console.warn("[ficha] erro na animação",e);
+    const p=c.p;disposeGroup(c);cur=null;
+    if(c.phase==="roll"||c.phase==="snap")showChip(p);
+    pump();return;
+  }
+  raf=requestAnimationFrame(loop);
+}
+
+/* ---------- encerramento ---------- */
+function maybeIdle(){
+  if(cur||queue.length||chips.children.length)return;
+  if(standalone){parent.postMessage({ordem:"overlay-done"},"*");return}
+  if(!OBR)return;
+  OBR.broadcast.sendMessage(CH.idle,{seen:received,idle:true},{destination:"LOCAL"}).catch(()=>{});
+  clearTimeout(idleTimer);
+  idleTimer=setTimeout(()=>{if(mid)OBR.modal.close(mid).catch(()=>{})},12000);   // garantia: fecha sozinha
+}
+
+/* ---------- início ---------- */
+(async()=>{
+  const s0=+qs.get("s")||0;
+  if(standalone){
+    try{enqueue(ENG.unb64(qs.get("p")),s0||1)}catch(e){parent.postMessage({ordem:"overlay-done"},"*")}
+    return;
+  }
+  OBR=await loadOBR();
+  if(!OBR||!(await ready(OBR)))OBR=null;
+  if(OBR){
+    OBR.broadcast.onMessage(CH.feed,ev=>{const d=ev.data||{};enqueue(d.p,+d.seq||0)});
+    OBR.broadcast.sendMessage(CH.idle,{seen:s0,idle:false},{destination:"LOCAL"}).catch(()=>{});
+  }
+  try{enqueue(ENG.unb64(qs.get("p")),s0)}catch(e){maybeIdle()}
+})();
+</script>
+</body>
+</html>

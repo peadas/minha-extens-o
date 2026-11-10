@@ -1,0 +1,15 @@
+{
+  "name": "Ficha Ordem Paranormal",
+  "version": "1.0.0",
+  "manifest_version": 1,
+  "description": "Ficha de personagem com dados 3D que rolam por cima da mesa, para todos os jogadores.",
+  "icon": "icon.svg",
+  "action": {
+    "title": "Ficha",
+    "icon": "icon.svg",
+    "popover": "ficha.html",
+    "width": 1120,
+    "height": 820
+  },
+  "background_url": "background.html"
+}

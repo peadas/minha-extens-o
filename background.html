@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="pt-BR">
+<head><meta charset="utf-8"><title>Ficha Ordem (segundo plano)</title></head>
+<body>
+<script src="engine.js"></script>
+<script type="module">
+/* Fica rodando o tempo todo na sala. Quando alguém rola, recebe o aviso e abre a camada
+   transparente (overlay.html) por cima da mesa, onde os dados caem para todo mundo. */
+import {loadOBR,ready} from "./obr.js";
+(async()=>{
+  const OBR=await loadOBR();
+  if(!OBR||!(await ready(OBR)))return;
+  const CH=ENG.CH,abs=p=>new URL(p,location.href).href;
+  let seq=0,open=false,mid="",lastAct=0;
+  const log=[];
+  const feed=e=>OBR.broadcast.sendMessage(CH.feed,e,{destination:"LOCAL"}).catch(()=>{});
+
+  async function openOverlay(e){
+    open=true;mid="ordem.ficha/overlay/"+Date.now();lastAct=Date.now();
+    try{
+      await OBR.modal.open({
+        id:mid,
+        url:abs("overlay.html")+"?mid="+encodeURIComponent(mid)+"&s="+e.seq+"&p="+ENG.b64(e.p),
+        fullScreen:true,hidePaper:true,hideBackdrop:true,disablePointerEvents:true
+      });
+    }catch(err){open=false;console.warn("[ficha] não consegui abrir a camada de dados",err)}
+  }
+
+  OBR.broadcast.onMessage(CH.roll,ev=>{
+    const p=ENG.clean(ev.data);if(!p)return;
+    if(open&&Date.now()-lastAct>45000)open=false;
+    const e={seq:++seq,p};log.push(e);while(log.length>20)log.shift();
+    lastAct=Date.now();
+    if(open)feed(e);else openOverlay(e);
+  });
+
+  OBR.broadcast.onMessage(CH.idle,ev=>{
+    const d=ev.data||{},seen=+d.seen||0;lastAct=Date.now();
+    const missing=log.filter(e=>e.seq>seen);
+    if(missing.length){missing.forEach(feed);return}
+    if(d.idle&&open){open=false;OBR.modal.close(mid).catch(()=>{})}
+  });
+})();
+</script>
+</body>
+</html>
